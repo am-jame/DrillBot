@@ -1,0 +1,27 @@
+# Bot settings: holds the Discord token
+bot.env
+
+# PyCharm settings (workspace.xml holds the token in the "Run with token" run configuration)
+.idea/
+
+# Logs (bot.log rotates to bot.log.1 ... bot.log.5)
+bot.log
+bot.log.*
+service.log
+
+# Player data: Discord IDs, names, answers, running quizzes
+stats.db
+stats.db-journal
+
+# Generated copies and caches
+backups/
+words.json.bak
+meanings.json
+*.tmp
+
+# Python
+.venv/
+__pycache__/
+
+# macOS
+.DS_Store
