@@ -12,9 +12,11 @@ from datetime import date, timedelta
 
 tenses = []
 jsondict = []
-json_file = "words.json"
+# Files live next to this script, whatever folder the bot is started from.
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+json_file = os.path.join(BASE_DIR, "words.json")
 
-BACKUP_DIR = "backups"
+BACKUP_DIR = os.path.join(BASE_DIR, "backups")
 BACKUP_DAYS = 14         # keep one snapshot per day for this many days
 REQUEST_TIMEOUT = 15     # seconds; a stalled site shouldn't hang /add forever
 HEADERS = {"User-Agent": "CooljuCrawler language quiz bot (Discord)"}
@@ -412,7 +414,7 @@ def wiktionary_finnish(word, pos):
 
 # ---- English meanings (for lesson cards), from Wiktionary ----
 
-MEANINGS_FILE = "meanings.json"
+MEANINGS_FILE = os.path.join(BASE_DIR, "meanings.json")
 MEANING_LANGUAGES = {"ru": "Russian", "run": "Russian", "rua": "Russian", "ar": "Arabic", "sv": "Swedish",
                      "fi": "Finnish", "fin": "Finnish", "fia": "Finnish"}
 MEANING_POS = {"ru": "Verb", "ar": "Verb", "sv": "Verb", "fi": "Verb",

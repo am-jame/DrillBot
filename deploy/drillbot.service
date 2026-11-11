@@ -1,0 +1,19 @@
+# systemd *user* service for DrillBot on Linux (e.g. a Raspberry Pi).
+# Installed by deploy/setup_pi.sh, which fills in @BOT_DIR@. Manage it with:
+#   systemctl --user status|restart|stop drillbot
+[Unit]
+Description=DrillBot Discord bot
+# Keep retrying forever (the default gives up after 5 quick failures).
+StartLimitIntervalSec=0
+
+[Service]
+WorkingDirectory=@BOT_DIR@
+ExecStart=/bin/bash @BOT_DIR@/run_bot.sh
+Restart=always
+# Wait 30 s between restarts, so a crash loop (or no network at boot) doesn't hammer Discord.
+RestartSec=30
+StandardOutput=append:@BOT_DIR@/service.log
+StandardError=append:@BOT_DIR@/service.log
+
+[Install]
+WantedBy=default.target

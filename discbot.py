@@ -2061,7 +2061,8 @@ if __name__ == "__main__":
     # Log to the console and to bot.log (5 files of 1 MB, oldest dropped).
     from logging.handlers import RotatingFileHandler
     console = logging.StreamHandler()
-    logfile = RotatingFileHandler("bot.log", maxBytes=1_000_000, backupCount=5, encoding="utf-8")
+    log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot.log")
+    logfile = RotatingFileHandler(log_path, maxBytes=1_000_000, backupCount=5, encoding="utf-8")
     for handler in (console, logfile):
         handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s"))
     logging.basicConfig(level=logging.INFO, handlers=[console, logfile])

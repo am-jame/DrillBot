@@ -9,6 +9,10 @@ bot.log
 bot.log.*
 service.log
 
+# Word lists: built from cooljugator.com (not openly licensed) and Wiktionary, so not
+# published here. Copy words.json between machines like stats.db; it's backed up in backups/.
+words.json
+
 # Player data: Discord IDs, names, answers, running quizzes
 stats.db
 stats.db-journal
@@ -25,3 +29,6 @@ __pycache__/
 
 # macOS
 .DS_Store
+
+# Test cache
+.pytest_cache/
