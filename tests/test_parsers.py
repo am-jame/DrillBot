@@ -89,3 +89,28 @@ def test_stressed_form_falls_back_to_the_plain_text():
             '<div data-stressed="шёл бы"><div class="meta-form">шла бы</div></div>')  # a different form
     entries = BeautifulSoup(html, "html.parser").find_all("div", class_="meta-form")
     assert [crawler.stressed_form(e) for e in entries] == ["шла́", "шёл", "шла бы"]
+
+
+def test_russian_cases_are_read_by_cell_id_not_position():
+    # Hand-written, in cooljugator.com's format: some nouns have a locative (в году́) between
+    # the plural and singular cells, which used to shift every singular case by one.
+    cells = [("nom_P", "го́ды"), ("gen_P", "годо́в"), ("dat_P", "года́м"), ("acc_P", "го́ды"),
+             ("instr_P", "года́ми"), ("prep_P", "года́х"), ("loc", "году́"), ("nom_S", "го́д"),
+             ("gen_S", "го́да"), ("dat_S", "го́ду"), ("acc_S", "го́д"), ("instr_S", "го́дом"),
+             ("prep_S", "го́де")]
+    html = "".join(f'<div class="conjugation-cell" id="{cid}_no_accent" data-stressed="{form}">'
+                   f'<div class="meta-form">{crawler.strip_stress(form)}</div></div>' for cid, form in cells)
+    forms = crawler.parse_russian(BeautifulSoup(html, "html.parser"), "run")
+    assert forms["Gen Sing"] == {"": "го́да"} and forms["Dat Sing"] == {"": "го́ду"}
+    assert forms["Acc Sing"] == {"": "го́д"} and forms["Prep Sing"] == {"": "го́де"}
+    assert "Nom Sing" not in forms and len(forms) == 11
+
+
+def test_perfective_future_is_saved_as_present():
+    html = "".join(f'<div class="conjugation-cell" id="future{n}" data-stressed="{form}">'
+                   f'<div class="meta-form">{crawler.strip_stress(form)}</div></div>'
+                   for n, form in enumerate(["прочита́ю", "прочита́ешь", "прочита́ет",
+                                             "прочита́ем", "прочита́ете", "прочита́ют"], 1))
+    forms = crawler.parse_russian(BeautifulSoup(html, "html.parser"), "ru")
+    assert forms == {"Present": {"Я": "прочита́ю", "Ты": "прочита́ешь", "Он": "прочита́ет",
+                                 "Мы": "прочита́ем", "Вы": "прочита́ете", "Они": "прочита́ют"}}

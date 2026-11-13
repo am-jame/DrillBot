@@ -597,6 +597,47 @@ def stressed_form(entry):
     return entry.text
 
 
+# Cell ids on cooljugator.com's Russian pages ("_no_accent" removed) -> {tense: {label: id}}.
+# Forms are read by id, not position: some pages have extra cells in the middle, e.g. the
+# locative and partitive of час (в часу́, часу́), which would shift every case after them.
+RU_PERSONS = {"Я": "1", "Ты": "2", "Он": "3", "Мы": "4", "Вы": "5", "Они": "6"}
+RU_CASES = {"Nom": "nom", "Gen": "gen", "Dat": "dat", "Acc": "acc", "Inst": "instr", "Prep": "prep"}
+RU_GENDERS = {"Masc": "M", "Fem": "F", "Neu": "N", "Pl": "P"}
+RU_CELLS = {
+    "ru": {
+        "Present": {label: f"present{n}" for label, n in RU_PERSONS.items()},
+        "Imperative": {"Ты": "imperative2", "Вы": "imperative5"},
+        "Past": {"Masc": "past_singM", "Fem": "past_singF", "Neu": "past_singN", "Pl": "past_plur"},
+        "Participle": {"Pres Act": "present_active_participle", "Past Act": "past_active_participle",
+                       "Pres Past": "present_passive_participle", "Past Pass": "past_passive_participle",
+                       "Pres Adv": "present_adverbial_participle", "Past Adv": "past_adverbial_participle"},
+    },
+    # Nom Sing is left out: it's the word itself.
+    "run": {**{f"{case} Pl": {"": f"{cid}_P"} for case, cid in RU_CASES.items()},
+            **{f"{case} Sing": {"": f"{cid}_S"} for case, cid in RU_CASES.items() if case != "Nom"}},
+    "rua": {tense: {gender: f"{cid}_{g}" for gender, g in RU_GENDERS.items()}
+            for tense, cid in {"Nom": "nom", "Gen": "gen", "Dat": "dat", "Anim Acc": "acc_anim",
+                               "Inan Acc": "acc_inanim", "Inst": "instr", "Prep": "prep",
+                               "Short": "short"}.items()},
+}
+
+
+def parse_russian(page, pos):
+    """All forms of a Russian verb, noun or adjective with stress marks, or None if the page has none."""
+    found = {}
+    for entry in page.find_all("div", class_="meta-form"):
+        cell = entry.find_parent(id=True)
+        if cell is not None:
+            found.setdefault(cell["id"].removesuffix("_no_accent"), stressed_form(entry))
+    for n in RU_PERSONS.values():  # perfective verbs have a future (прочитаю) instead; it's quizzed as Present
+        if f"future{n}" in found:
+            found.setdefault(f"present{n}", found[f"future{n}"])
+    result = {tense: {label: found[cid] for label, cid in labels.items() if cid in found}
+              for tense, labels in RU_CELLS[pos].items()}
+    result = {tense: forms for tense, forms in result.items() if forms}
+    return result or None
+
+
 def get_page(word, pos):
     if pos == "sv":
         return wiktionary_swedish(word)
@@ -610,131 +651,7 @@ def get_page(word, pos):
     page = soup(response.text, "html.parser")
     if pos == 'ar':
         return parse_arabic(page)
-    entries = page.find_all("div", class_="meta-form")
-    entry_text = [stressed_form(entry) for entry in entries]
-    if len(entry_text) == 0:
-        return None
-    try:
-        if pos == 'ru':
-            return {
-                "Present": {
-                    "Я": entry_text[0],
-                    "Ты": entry_text[1],
-                    "Он": entry_text[2],
-                    "Мы": entry_text[3],
-                    "Вы": entry_text[4],
-                    "Они": entry_text[5]
-                },
-                "Imperative": {
-                    "Ты": entry_text[7],
-                    "Вы": entry_text[10],
-                },
-                "Past": {
-                    "Masc" : entry_text[12],
-                    "Fem" : entry_text[13],
-                    "Neu" : entry_text[14],
-                    "Pl" : entry_text[15]
-                },
-                "Participle": {
-                    "Pres Act" : entry_text[20],
-                    "Past Act" : entry_text[21],
-                    "Pres Past" : entry_text[22],
-                    "Past Pass" : entry_text[23],
-                    "Pres Adv" : entry_text[24],
-                    "Past Adv" : entry_text[25]
-                }
-            }
-        elif pos == 'run':
-            return {
-                "Nom Pl": {
-                    "": entry_text[0],
-                },
-                "Gen Pl": {
-                    "": entry_text[1],
-                },
-                "Dat Pl": {
-                    "": entry_text[2],
-                },
-                "Acc Pl": {
-                    "": entry_text[3],
-                },
-                "Inst Pl": {
-                    "": entry_text[4],
-                },
-                "Prep Pl": {
-                    "": entry_text[5],
-                },
-                "Gen Sing": {
-                    "": entry_text[7],
-                },
-                "Dat Sing": {
-                    "": entry_text[8],
-                },
-                "Acc Sing": {
-                    "": entry_text[9],
-                },
-                "Inst Sing": {
-                    "": entry_text[10],
-                },
-                "Prep Sing": {
-                    "": entry_text[11],
-                }
-            }
-        elif pos == 'rua':
-            return {
-                "Nom": {
-                    "Masc": entry_text[8],
-                    "Fem": entry_text[16],
-                    "Neu": entry_text[24],
-                    "Pl": entry_text[0]
-                },
-                "Gen": {
-                    "Masc": entry_text[9],
-                    "Fem": entry_text[17],
-                    "Neu": entry_text[25],
-                    "Pl": entry_text[1]
-                },
-                "Dat": {
-                    "Masc": entry_text[10],
-                    "Fem": entry_text[18],
-                    "Neu": entry_text[26],
-                    "Pl": entry_text[2]
-                },
-                "Anim Acc": {
-                    "Masc": entry_text[11],
-                    "Fem": entry_text[19],
-                    "Neu": entry_text[27],
-                    "Pl": entry_text[3]
-                },
-                "Inan Acc": {
-                    "Masc": entry_text[12],
-                    "Fem": entry_text[20],
-                    "Neu": entry_text[28],
-                    "Pl": entry_text[4]
-                },
-                "Inst": {
-                    "Masc": entry_text[13],
-                    "Fem": entry_text[21],
-                    "Neu": entry_text[29],
-                    "Pl": entry_text[5]
-                },
-                "Prep": {
-                    "Masc": entry_text[14],
-                    "Fem": entry_text[22],
-                    "Neu": entry_text[30],
-                    "Pl": entry_text[6]
-                },
-                "Short": {
-                    "Masc": entry_text[15],
-                    "Fem": entry_text[23],
-                    "Neu": entry_text[31],
-                    "Pl": entry_text[7]
-                }
-            }
-        return {}
-    except IndexError as e:
-        return None
-    #entry_text[:6] + [entry_text[7]] + [entry_text[10]] + entry_text[12:16] + entry_text[20:22]
+    return parse_russian(page, pos)
 
 
 
