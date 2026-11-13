@@ -122,6 +122,7 @@ class QuizSetup:
     count: int | None = None  # how many questions; None means all
     table: bool = False  # full-table mode
     tashkeel: bool = False  # Arabic answers must include the vowel marks
+    stress: bool = False  # Russian answers must mark the stress
 
 
 @dataclass
@@ -152,6 +153,7 @@ class QuizSession:
     skipped_tries: dict[str, int] = field(default_factory=dict)
     public_thread: bool = False  # a public thread the bot made: results go to the main channel too
     tashkeel: bool = False  # Arabic answers must include the vowel marks exactly
+    stress: bool = False  # Russian answers must mark the stressed vowel (де́лаю or де'лаю)
     # For the buttons: a random id for this quiz, plus a count of questions asked, so a
     # button can tell whether it belongs to the open question (even after a restart).
     token: int = field(default_factory=lambda: random.getrandbits(31))
@@ -238,12 +240,49 @@ def results_embed(session: QuizSession, stopped: bool) -> discord.Embed:
     return embed
 
 
-def normalize(text: str, keep_marks: bool = False) -> str:
-    """For comparing answers: ignores case, ё vs е (most people type е), the Arabic
-    tatweel, and Arabic vowel marks (tashkeel) unless `keep_marks`."""
+RUSSIAN = ("ru", "run", "rua")
+RU_VOWELS = "аеёиоуыэюя"
+STRESS = crawler.STRESS_MARK
+# A stress mark typed after a Russian vowel: an apostrophe (or a lookalike) or the real accent.
+TYPED_STRESS = re.compile(f"(?<=[{RU_VOWELS}])['’ʼ´`\u0301]")
+# NFC joins е/и with a grave accent (secondary stress) into single letters; undo that.
+GRAVE_LETTERS = str.maketrans({"ѐ": "е", "ѝ": "и", "\u0300": None})
+
+
+def normalize(text: str, keep_marks: bool = False, stress: bool = False) -> str:
+    """For comparing answers: ignores case, the Arabic tatweel, Arabic vowel marks (tashkeel)
+    unless `keep_marks`, and Russian stress and ё vs е (most people type е) unless `stress`.
+
+    Russian stress can be typed as an apostrophe after the stressed vowel: де'лаю = де́лаю."""
     # NFC puts stacked marks in one order, so shadda+fatha and fatha+shadda compare equal.
-    text = unicodedata.normalize("NFC", text.strip().lower()).replace('ё', 'е').replace('\u0640', '')
+    text = unicodedata.normalize("NFC", text.strip().lower()).replace('\u0640', '').translate(GRAVE_LETTERS)
+    text = TYPED_STRESS.sub(STRESS, text)
+    text = mark_stress(text) if stress else text.replace(STRESS, '').replace('ё', 'е')
     return text if keep_marks else crawler.strip_tashkeel(text)
+
+
+def mark_stress(text: str) -> str:
+    """Write Russian stress one way: ё becomes е́ (ё is always stressed), and a word with a
+    single vowel gets the mark even if it wasn't typed (сто́л = стол)."""
+    text = re.sub(STRESS + "+", STRESS, text.replace('ё', 'е' + STRESS))
+    words = []
+    for word in text.split(' '):
+        if STRESS not in word and sum(ch in RU_VOWELS for ch in word) == 1:
+            word = re.sub(f"([{RU_VOWELS}])", r"\1" + STRESS, word, count=1)
+        words.append(word)
+    return ' '.join(words)
+
+
+def same_answer(typed: str, answer: str, stress: bool) -> bool:
+    """Compare normalized answers. With `stress`, a word saved without a stress mark (older
+    data) doesn't need one: the mark is only checked where it's known."""
+    if typed == answer:
+        return True
+    if not stress:
+        return False
+    typed_words, answer_words = typed.split(' '), answer.split(' ')
+    return len(typed_words) == len(answer_words) and all(
+        t == a or (STRESS not in a and t.replace(STRESS, '') == a) for t, a in zip(typed_words, answer_words))
 
 
 def split_table_answer(text: str) -> list[str]:
@@ -253,26 +292,28 @@ def split_table_answer(text: str) -> list[str]:
     return text.split()
 
 
-def matches(text: str, answer: str, tashkeel: bool = False) -> bool:
+def matches(text: str, answer: str, tashkeel: bool = False, stress: bool = False) -> bool:
     """Whether `text` is the answer, or one of its alternatives ("omenien / omenoiden")."""
-    typed = normalize(text, tashkeel)
-    return any(typed == normalize(option, tashkeel) for option in answer.split(crawler.SEPARATOR))
+    typed = normalize(text, tashkeel, stress)
+    return any(same_answer(typed, normalize(option, tashkeel, stress), stress)
+               for option in answer.split(crawler.SEPARATOR))
 
 
-def table_marks(prompt: Prompt, text: str, tashkeel: bool = False) -> list[bool] | None:
+def table_marks(prompt: Prompt, text: str, tashkeel: bool = False, stress: bool = False) -> list[bool] | None:
     """Right/wrong for each form of a full-table answer, or None if the number of forms is off."""
     parts = split_table_answer(text)
     if len(parts) != len(prompt.forms):
         return None
-    return [matches(part, answer, tashkeel) for part, answer in zip(parts, prompt.forms.values())]
+    return [matches(part, answer, tashkeel, stress) for part, answer in zip(parts, prompt.forms.values())]
 
 
-def is_right(prompt: Prompt, text: str, tashkeel: bool = False) -> bool:
-    """`tashkeel`: Arabic vowel marks must match too (otherwise they're ignored)."""
+def is_right(prompt: Prompt, text: str, tashkeel: bool = False, stress: bool = False) -> bool:
+    """`tashkeel`: Arabic vowel marks must match too; `stress`: Russian stress marks must
+    match too (otherwise both are ignored)."""
     if prompt.forms:
-        marks = table_marks(prompt, text, tashkeel)
+        marks = table_marks(prompt, text, tashkeel, stress)
         return bool(marks) and all(marks)
-    return matches(text, prompt.answer, tashkeel)
+    return matches(text, prompt.answer, tashkeel, stress)
 
 
 def table_feedback(prompt: Prompt, text: str, marks: list[bool] | None) -> str:
@@ -695,13 +736,17 @@ def parse_start_args(args: str, usage: str, flags: tuple[str, ...] = ("private",
     return count, found
 
 
-def apply_tashkeel(prompts: list[Prompt], label: str, tashkeel: bool) -> str:
-    """Check the tashkeel option makes sense for these questions, and mark it in the quiz name."""
-    if not tashkeel:
-        return label
-    if not any(p.pos == "ar" for p in prompts):
-        raise UsageError("The tashkeel option is for Arabic lists: pick at least one.")
-    return f"{label} (with tashkeel)"
+def apply_marks(prompts: list[Prompt], label: str, tashkeel: bool, stress: bool = False) -> str:
+    """Check the tashkeel and stress options make sense for these questions, and mark them in the quiz name."""
+    if tashkeel:
+        if not any(p.pos == "ar" for p in prompts):
+            raise UsageError("The tashkeel option is for Arabic lists: pick at least one.")
+        label = f"{label} (with tashkeel)"
+    if stress:
+        if not any(p.pos in RUSSIAN for p in prompts):
+            raise UsageError("The stress option is for Russian lists: pick at least one.")
+        label = f"{label} (with stress)"
+    return label
 
 
 def question_count(prompts: list[Prompt], available: int) -> str:
@@ -1050,7 +1095,7 @@ class Client(discord.Client):
         if text.startswith("!"):
             await channel.send("Quiz in progress: answer, or use the buttons (`!ans`, `!skip`, `!stop`).")
             return
-        if is_right(prompt, text, session.tashkeel):
+        if is_right(prompt, text, session.tashkeel, session.stress):
             session.player(message.author).correct += 1
             self.save_stat(channel, message.author, prompt, "correct")
             if session.wrong_tries == 0:
@@ -1060,7 +1105,7 @@ class Client(discord.Client):
             self.next_prompt(channel, session)
             self.persist(channel.id)
             await message.add_reaction("✅")
-        elif session.previous and is_right(session.previous, text, session.tashkeel):
+        elif session.previous and is_right(session.previous, text, session.tashkeel, session.stress):
             await message.add_reaction("⏱️")  # right, but someone else got there first
             return
         elif is_chatter(message, prompt.answer, self.user):
@@ -1068,7 +1113,7 @@ class Client(discord.Client):
         else:
             session.wrong_tries += 1
             session.player(message.author).wrong += 1
-            marks = table_marks(prompt, text, session.tashkeel) if prompt.forms else None
+            marks = table_marks(prompt, text, session.tashkeel, session.stress) if prompt.forms else None
             if not prompt.forms:
                 self.save_stat(channel, message.author, prompt, "wrong")
             elif marks:  # stats only for the forms that were wrong
@@ -1079,8 +1124,9 @@ class Client(discord.Client):
             await message.add_reaction("❌")
             if prompt.forms:
                 await message.reply(table_feedback(prompt, text, marks), mention_author=False)
-            elif session.tashkeel and is_right(prompt, text):
-                await message.reply("The letters are right, but the tashkeel isn't.", mention_author=False)
+            elif (session.tashkeel or session.stress) and is_right(prompt, text):
+                marks_name = "tashkeel" if prompt.pos == "ar" else "stress"
+                await message.reply(f"The letters are right, but the {marks_name} isn't.", mention_author=False)
             return
         await self.send_current(channel, session)
 
@@ -1117,14 +1163,14 @@ class Client(discord.Client):
         if retry is None:
             await interaction.response.send_message("That retry has expired.", ephemeral=True)
             return
-        label, prompts, used_by, tashkeel = retry
+        label, prompts, used_by, tashkeel, stress = retry
         # claim_retry is atomic, so a double click can't start two quizzes.
         if used_by or not self.store.claim_retry(retry_id, user.display_name):
             await interaction.response.send_message("That retry has already started.", ephemeral=True)
             return
         await interaction.response.edit_message(view=used_retry_view(user.display_name))
         label = label if label.endswith("(retry)") else f"{label} (retry)"
-        await self.start_quiz(interaction.message, [Prompt(**p) for p in prompts], label, tashkeel=tashkeel)
+        await self.start_quiz(interaction.message, [Prompt(**p) for p in prompts], label, tashkeel, stress)
 
     def reveal(self, channel, session: QuizSession, user):
         self.save_stat(channel, user, session.current, "revealed")
@@ -1172,7 +1218,11 @@ class Client(discord.Client):
             await self.end_quiz(channel, session)
             return
         serial = session.serial
-        marks_note = "\n-# with tashkeel" if session.tashkeel and session.current.pos == "ar" else ""
+        marks_note = ""
+        if session.tashkeel and session.current.pos == "ar":
+            marks_note = "\n-# with tashkeel"
+        elif session.stress and session.current.pos in RUSSIAN:
+            marks_note = "\n-# mark the stress: an apostrophe after the stressed vowel (де'лаю) or де́лаю"
         message = await channel.send(f"`{session.number}/{session.total}` {session.current.question}{marks_note}",
                                      view=question_view(session))
         if session.serial == serial and self.sessions.get(channel.id) is session:  # still the open question
@@ -1200,7 +1250,8 @@ class Client(discord.Client):
             # Without repeats (the same form can be missed in two lists).
             missed = list({p.key: p for p in session.missed}.values())
             try:
-                retry_id = self.store.add_retry(session.label, [asdict(p) for p in missed], session.tashkeel)
+                retry_id = self.store.add_retry(session.label, [asdict(p) for p in missed], session.tashkeel,
+                                                session.stress)
                 view = retry_view(retry_id, len(missed))
             except Exception as e:
                 log.warning(f"could not save retry: {e!r}")
@@ -1347,25 +1398,27 @@ class Client(discord.Client):
         await message.channel.send("Quiz queue cleared.")
 
     async def cmd_start(self, message: Message, args: str):
-        """!start [count] [private] [table] [tashkeel] - start a quiz on the queued lists and tenses, e.g. `!start 20 table` (table: type every form of a tense in one answer; tashkeel: Arabic answers need the vowel marks)"""
+        """!start [count] [private] [table] [tashkeel] [stress] - start a quiz on the queued lists and tenses, e.g. `!start 20 table` (table: type every form of a tense in one answer; tashkeel: Arabic answers need the vowel marks; stress: Russian answers need the stress, e.g. де'лаю)"""
         setup = self.setup_for(message.channel)
         count, flags = parse_start_args(
-            args, "Usage: `!start [number of questions] [private] [table] [tashkeel]`, "
-                  "e.g. `!start 20` or `!start private table`", ("private", "table", "tashkeel"))
+            args, "Usage: `!start [number of questions] [private] [table] [tashkeel] [stress]`, "
+                  "e.g. `!start 20` or `!start private table`", ("private", "table", "tashkeel", "stress"))
         if count:
             setup.count = count
         if args:
             setup.table = "table" in flags
             setup.tashkeel = "tashkeel" in flags
+            setup.stress = "stress" in flags
         prompts, label, available = prepare_quiz(setup.lists, setup.tenses, setup.count, setup.table)
-        label = apply_tashkeel(prompts, label, setup.tashkeel)
+        label = apply_marks(prompts, label, setup.tashkeel, setup.stress)
         if "private" in flags:
-            thread = await self.start_private_quiz(message.channel, message.author, prompts, label, setup.tashkeel)
+            thread = await self.start_private_quiz(message.channel, message.author, prompts, label, setup.tashkeel,
+                                                   setup.stress)
             await message.reply(f"Your private quiz is ready: {thread.mention} ({question_count(prompts, available)})")
             return
         if len(prompts) < available:
             await message.channel.send(f"Quizzing {question_count(prompts, available)}.")
-        await self.start_quiz(message, prompts, label, setup.tashkeel)
+        await self.start_quiz(message, prompts, label, setup.tashkeel, setup.stress)
 
     async def cmd_stats(self, message: Message, args: str):
         """!stats [@user] - show saved quiz stats"""
@@ -1396,10 +1449,11 @@ class Client(discord.Client):
         """!leaderboard - top players in this server"""
         await message.channel.send(embed=leaderboard_embed(self.stats, guild_id(message.channel)))
 
-    async def start_quiz(self, message: Message, prompts: list[Prompt], label: str, tashkeel: bool = False):
+    async def start_quiz(self, message: Message, prompts: list[Prompt], label: str, tashkeel: bool = False,
+                         stress: bool = False):
         """Start a quiz in a thread on `message` (or in its channel if a thread isn't possible)."""
         channel, public_thread = await self.quiz_channel(message, label)
-        await self.run_quiz(channel, prompts, label, public_thread, tashkeel)
+        await self.run_quiz(channel, prompts, label, public_thread, tashkeel, stress)
 
     # ---- Lessons ----
 
@@ -1581,7 +1635,7 @@ class Client(discord.Client):
             await message.reply(f"Your lesson is ready: {where.mention}")
 
     async def start_private_quiz(self, channel, user, prompts: list[Prompt], label: str,
-                                 tashkeel: bool = False) -> discord.Thread:
+                                 tashkeel: bool = False, stress: bool = False) -> discord.Thread:
         """Start a quiz in a new private thread that only `user` (plus anyone they @mention, and mods) can see."""
         if not isinstance(channel, discord.TextChannel):
             raise UsageError("Private quizzes can only be started from a server text channel.")
@@ -1593,13 +1647,13 @@ class Client(discord.Client):
             log.warning(f"could not create private thread: {e!r}")
             raise UsageError("I couldn't create a private thread here. "
                              "Give me the Create Private Threads permission and try again.")
-        await self.run_quiz(thread, prompts, label, tashkeel=tashkeel)
+        await self.run_quiz(thread, prompts, label, tashkeel=tashkeel, stress=stress)
         return thread
 
     async def run_quiz(self, channel, prompts: list[Prompt], label: str, public_thread: bool = False,
-                       tashkeel: bool = False):
+                       tashkeel: bool = False, stress: bool = False):
         session = QuizSession(list(prompts), label=label, public_thread=public_thread,  # a copy: it pops
-                              tashkeel=tashkeel)
+                              tashkeel=tashkeel, stress=stress)
         self.sessions[channel.id] = session
         session.advance()
         self.persist(channel.id)
@@ -1851,16 +1905,17 @@ def add_slash_commands(client: "Client"):
         return lambda func: func
 
     async def launch(interaction: discord.Interaction, prompts: list[Prompt], label: str, size: str, private: bool,
-                     tashkeel: bool = False):
+                     tashkeel: bool = False, stress: bool = False):
         if private:
             # Only the person who asked sees this reply; the quiz itself is in the private thread.
             await interaction.response.defer(ephemeral=True, thinking=True)
-            thread = await client.start_private_quiz(interaction.channel, interaction.user, prompts, label, tashkeel)
+            thread = await client.start_private_quiz(interaction.channel, interaction.user, prompts, label, tashkeel,
+                                                     stress)
             await interaction.followup.send(f"Your private quiz is ready: {thread.mention} ({size})", ephemeral=True)
         else:
             await interaction.response.send_message(
                 f"{interaction.user.mention} started a quiz: **{label}** ({size})")
-            await client.start_quiz(await interaction.original_response(), prompts, label, tashkeel)
+            await client.start_quiz(await interaction.original_response(), prompts, label, tashkeel, stress)
 
     @tree.error
     async def on_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
@@ -2008,21 +2063,22 @@ def add_slash_commands(client: "Client"):
                            count="How many questions, picked at random (default: all of them)",
                            private="Practise alone in a private thread only you can see",
                            table="Full tables: type every form of a tense (e.g. all 6 Present forms) in one answer",
-                           tashkeel="Arabic: answers must include the vowel marks exactly (otherwise they're optional)")
+                           tashkeel="Arabic: answers must include the vowel marks exactly (otherwise they're optional)",
+                           stress="Russian: answers must mark the stress, e.g. де'лаю or де́лаю (otherwise it's optional)")
     @app_commands.autocomplete(lists=lists_autocomplete, tenses=tenses_autocomplete)
     async def quiz(interaction: discord.Interaction, lists: str, tenses: str,
                    count: app_commands.Range[int, 1, 1000] | None = None, private: bool = False,
-                   table: bool = False, tashkeel: bool = False):
+                   table: bool = False, tashkeel: bool = False, stress: bool = False):
         if interaction.channel_id in client.sessions:
             raise UsageError("A quiz is already running here.")
         list_keys = parse_lists(lists)
         tense_names = parse_tenses(tenses)
         check_tenses(list_keys, tense_names)
         prompts, label, available = prepare_quiz(list_keys, tense_names, count, table)
-        label = apply_tashkeel(prompts, label, tashkeel)
+        label = apply_marks(prompts, label, tashkeel, stress)
         # Remember it so `!start` can repeat the same quiz.
-        client.setups[interaction.channel_id] = QuizSetup(list_keys, tense_names, count, table, tashkeel)
-        await launch(interaction, prompts, label, question_count(prompts, available), private, tashkeel)
+        client.setups[interaction.channel_id] = QuizSetup(list_keys, tense_names, count, table, tashkeel, stress)
+        await launch(interaction, prompts, label, question_count(prompts, available), private, tashkeel, stress)
 
     @tree.command(description="Show saved quiz stats")
     @app_commands.describe(user="Whose stats to show (default: yours)")

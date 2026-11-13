@@ -83,10 +83,14 @@ in production).
   `pos` codes: `ru`/`run`/`rua` Russian verbs/nouns/adjectives, `ar` Arabic verbs,
   `fi`/`fin`/`fia` Finnish, `sv` Swedish. Quiz categories per `pos` are in `avail_quizes`.
   Several correct answers are stored as `"a / b"` (`crawler.SEPARATOR`). Arabic forms keep full
-  tashkeel; Arabic verbs from Wiktionary are keyed by their vowelled spelling.
-- **Answer checking** (`normalize`, `matches`, `is_right`, `is_chatter`): case, ё/е and Arabic
-  marks are ignored unless a quiz uses the `tashkeel` option; chat (other alphabet, replies,
-  @mentions, sentences) is ignored instead of marked wrong.
+  tashkeel; Arabic verbs from Wiktionary are keyed by their vowelled spelling. Russian forms keep
+  their stress as U+0301 after the stressed vowel (де́лаю; forms with ё have no mark); word keys
+  stay unmarked.
+- **Answer checking** (`normalize`, `matches`, `is_right`, `is_chatter`): case and Arabic marks
+  are ignored unless a quiz uses the `tashkeel` option; Russian stress and ё/е are ignored unless
+  it uses the `stress` option, where an apostrophe after the vowel counts as the mark (де'лаю),
+  ё counts as stressed, one-vowel words need no mark, and words saved without a mark aren't
+  checked. Chat (other alphabet, replies, @mentions, sentences) is ignored instead of marked wrong.
 - **List editing** (`/new`, `/add`, `/remove`, `/rename`, `/deletelist`, right-click Add to word
   list) is registered only in the home server; the `!` versions check it in `require_home`.
 

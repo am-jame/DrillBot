@@ -22,7 +22,8 @@ CREATE TABLE IF NOT EXISTS retries (
     prompts  TEXT NOT NULL,  -- JSON list of prompt dicts
     used_by  TEXT,           -- name of whoever pressed it; NULL until then
     created  TEXT NOT NULL,
-    tashkeel INTEGER NOT NULL DEFAULT 0  -- the retry also requires Arabic vowel marks
+    tashkeel INTEGER NOT NULL DEFAULT 0,  -- the retry also requires Arabic vowel marks
+    stress   INTEGER NOT NULL DEFAULT 0   -- the retry also requires Russian stress marks
 );
 """
 
@@ -35,11 +36,12 @@ class QuizStore:
     def __init__(self, path: str = DB_PATH):
         self.db = sqlite3.connect(path)
         self.db.executescript(SCHEMA)
-        # Databases made before the tashkeel option don't have its column yet.
+        # Databases made before the tashkeel and stress options don't have their columns yet.
         columns = {row[1] for row in self.db.execute("PRAGMA table_info(retries)")}
-        if "tashkeel" not in columns:
-            with self.db:
-                self.db.execute("ALTER TABLE retries ADD COLUMN tashkeel INTEGER NOT NULL DEFAULT 0")
+        for column in ("tashkeel", "stress"):
+            if column not in columns:
+                with self.db:
+                    self.db.execute(f"ALTER TABLE retries ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0")
 
     # ---- running quizzes ----
 
@@ -58,17 +60,18 @@ class QuizStore:
 
     # ---- retry buttons ----
 
-    def add_retry(self, label: str, prompts: list[dict], tashkeel: bool = False) -> int:
+    def add_retry(self, label: str, prompts: list[dict], tashkeel: bool = False, stress: bool = False) -> int:
         with self.db:
-            cur = self.db.execute("INSERT INTO retries (label, prompts, created, tashkeel) VALUES (?, ?, ?, ?)",
-                                  (label, json.dumps(prompts, ensure_ascii=False), _now(), int(tashkeel)))
+            cur = self.db.execute(
+                "INSERT INTO retries (label, prompts, created, tashkeel, stress) VALUES (?, ?, ?, ?, ?)",
+                (label, json.dumps(prompts, ensure_ascii=False), _now(), int(tashkeel), int(stress)))
         return cur.lastrowid
 
-    def get_retry(self, retry_id: int) -> tuple[str, list[dict], str | None, bool] | None:
-        """(label, prompts, used_by, tashkeel), or None if there's no such retry."""
-        row = self.db.execute("SELECT label, prompts, used_by, tashkeel FROM retries WHERE id = ?",
+    def get_retry(self, retry_id: int) -> tuple[str, list[dict], str | None, bool, bool] | None:
+        """(label, prompts, used_by, tashkeel, stress), or None if there's no such retry."""
+        row = self.db.execute("SELECT label, prompts, used_by, tashkeel, stress FROM retries WHERE id = ?",
                               (retry_id,)).fetchone()
-        return (row[0], json.loads(row[1]), row[2], bool(row[3])) if row else None
+        return (row[0], json.loads(row[1]), row[2], bool(row[3]), bool(row[4])) if row else None
 
     def claim_retry(self, retry_id: int, name: str) -> bool:
         """Mark a retry as used. False if someone already used it."""

@@ -575,6 +575,28 @@ def wiktionary_swedish(word):
     return None
 
 
+# ---- Russian stress ----
+# Each cooljugator.com cell shows the plain form, and its data-stressed attribute has the
+# same form with an acute accent (U+0301) after the stressed vowel: де́лаю, столы́.
+# Forms with ё have no attribute (ё is always stressed), so those keep the plain text.
+STRESS_MARK = "\u0301"
+GRAVE_MARK = "\u0300"  # secondary stress, occasionally used in compounds
+
+
+def strip_stress(text):
+    return text.replace(STRESS_MARK, "").replace(GRAVE_MARK, "")
+
+
+def stressed_form(entry):
+    """The form in a meta-form div, with its stress mark when the site has one."""
+    cell = entry.find_parent(attrs={"data-stressed": True})
+    if cell is not None:
+        stressed = cell["data-stressed"].strip()
+        if stressed and strip_stress(stressed) == entry.text.strip():  # the same form, just marked
+            return stressed
+    return entry.text
+
+
 def get_page(word, pos):
     if pos == "sv":
         return wiktionary_swedish(word)
@@ -589,7 +611,7 @@ def get_page(word, pos):
     if pos == 'ar':
         return parse_arabic(page)
     entries = page.find_all("div", class_="meta-form")
-    entry_text = [entry.text for entry in entries]
+    entry_text = [stressed_form(entry) for entry in entries]
     if len(entry_text) == 0:
         return None
     try:

@@ -79,6 +79,32 @@ def test_retry_button_starts_one_quiz_on_the_missed_words(bot):
     asyncio.run(run())
 
 
+def test_stress_quiz_explains_a_wrong_stress_and_keeps_it_for_the_retry(bot):
+    async def run():
+        ch = FakeChannel()
+        word = Prompt("делать", "Present", "Я", "де́лаю", "ru")
+        s = await start(bot, ch, [word], stress=True)
+        assert "mark the stress" in ch.last.content
+        wrong = await say(bot, ch, ANA, "дела'ю")
+        assert wrong.reactions == ["❌"] and wrong.replies == ["The letters are right, but the stress isn't."]
+        await say(bot, ch, ANA, "де'лаю")
+        assert ch.id not in bot.sessions and s.missed == [word]
+        await click(bot, ch.last, "Retry missed", ANA)
+        assert bot.sessions[ch.id].stress
+    asyncio.run(run())
+
+
+def test_stress_option_needs_a_russian_list():
+    swedish = [Prompt("tala", "Present", "", "talar", "sv")]
+    try:
+        discbot.apply_marks(swedish, "Test", tashkeel=False, stress=True)
+        raise AssertionError("expected a UsageError")
+    except discbot.UsageError as e:
+        assert "Russian" in str(e)
+    assert discbot.apply_marks([Prompt("делать", "Present", "Я", "де́лаю", "ru")], "Test", False, True) == \
+        "Test (with stress)"
+
+
 def test_quiz_survives_a_restart(bot, monkeypatch):
     async def run():
         ch = FakeChannel()
